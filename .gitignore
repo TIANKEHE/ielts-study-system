@@ -39,3 +39,8 @@ secrets*.json
 # Local logs and authentication caches
 *.log
 .auth/
+# Generated ORM clients and private migration datasets
+generated/
+*.dump
+*.sql.gz
+migration-data/

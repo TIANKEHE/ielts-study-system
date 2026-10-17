@@ -1,3 +1,4 @@
+import {protectApi} from '@/lib/auth';
 import {NextRequest,NextResponse} from 'next/server';
 import {z} from 'zod';
 import {db} from '@/lib/db';
@@ -9,8 +10,8 @@ import {startCambridgeDaily} from '@/lib/cambridge-plan';
 import {startSession,submitSession,TRAINING_MODES} from '@/lib/training';
 export const runtime='nodejs';
 const wordSchema=z.object({english:z.string().trim().min(1),chinese:z.string().trim().min(1),ipa:z.string().default(''),pos:z.string().default(''),example:z.string().default(''),collocation:z.string().default(''),notes:z.string().default(''),topic:z.string().default(''),aliases:z.string().default(''),forms:z.string().default(''),chapterId:z.string().min(1),sourceId:z.string().optional(),questionNumber:z.string().default('')});
-export async function GET(){try{return NextResponse.json(await snapshot({full:false}));}catch(e){console.error(e);return NextResponse.json({error:'读取数据库失败，请检查数据库初始化状态'},{status:500});}}
-export async function POST(req:NextRequest){
+async function handleGET(){try{return NextResponse.json(await snapshot({full:false}));}catch(e){console.error(e);return NextResponse.json({error:'读取数据库失败，请检查数据库初始化状态'},{status:500});}}
+async function handlePOST(req:NextRequest){
  try{
  if(req.headers.get('origin')&&new URL(req.headers.get('origin')!).host!==req.headers.get('host'))throw Error('请求来源无效');
  const b=await req.json();const day=await today();
@@ -45,3 +46,7 @@ export async function POST(req:NextRequest){
  return NextResponse.json({ok:true});
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:'操作失败'},{status:400});}
 }
+
+export const GET=protectApi(handleGET);
+
+export const POST=protectApi(handlePOST);

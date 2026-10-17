@@ -1,3 +1,4 @@
+if(!process.env.DATABASE_URL?.startsWith('file:'))throw Error('此恢复脚本仅用于本地SQLite；PostgreSQL使用单独迁移/备份流程');
 import {PrismaClient} from '@prisma/client';
 import {readFileSync,copyFileSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';

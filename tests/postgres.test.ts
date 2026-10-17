@@ -1,0 +1,60 @@
+import {beforeAll,afterAll,it,expect,vi} from 'vitest';
+import {PGlite} from '@electric-sql/pglite';
+import {PGLiteSocketServer} from '@electric-sql/pglite-socket';
+import {PrismaClient as SQLiteClient} from '@prisma/client';
+import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {resolve} from 'node:path';
+import {createServer} from 'node:net';
+import {randomUUID,createHash} from 'node:crypto';
+let pg:any,server:any,db:any,url:string,dir:string,manifest:string,training:any;
+let migrate:any,targetIdentity:any;
+beforeAll(async()=>{
+ dir=mkdtempSync('work/postgres-test-');const file=resolve(dir,'source.db'),sqliteUrl='file:'+file;writeFileSync(file,'');
+ execFileSync(process.execPath,['node_modules/prisma/build/index.js','db','push','--skip-generate'],{env:{...process.env,DATABASE_URL:sqliteUrl},stdio:'pipe'});
+ const src=new SQLiteClient({datasourceUrl:sqliteUrl});const now=new Date('2026-10-17T04:00:00Z');
+ await src.setting.create({data:{id:1}});await src.book.create({data:{id:'book',key:'CAMBRIDGE',name:'真实测试教材',skill:'听力',sort:-100}});await src.chapter.create({data:{id:'chapter',key:'cambridge:scene',bookId:'book',name:'场景',sort:-2}});
+ for(const [i,english] of ['hare','exist','insect'].entries())await src.word.create({data:{id:'word'+i,english,chinese:['野兔','存在','昆虫'][i],ipa:'/test/'}});
+ const queue=[];for(const [position,wordId] of ['word0','word2','word0','word1'].entries()){const id='source'+position;await src.source.create({data:{id,wordId,chapterId:'chapter',meaning:'用户确认释义',position,originalPosition:position}});const w=await src.word.findUniqueOrThrow({where:{id:wordId}});queue.push({wordId,sourceId:id,english:w.english,chinese:'用户确认释义',ipa:w.ipa,pos:w.pos,label:'真实测试教材 / 场景'});}
+ const scopeKey=createHash('sha256').update(JSON.stringify(queue.map(i=>i.sourceId).sort())).digest('hex');
+ await src.trainingSession.create({data:{id:'session',scopeKey,title:'未完成训练',mode:'TEST_THEN_FIVE',queue:JSON.stringify(queue),phase:'CORRECTION',correctCount:2,currentErrors:1,createdAt:now,updatedAt:now}});
+ await src.trainingSubmission.create({data:{id:randomUUID(),sessionId:'session',requestBody:'{}',response:JSON.stringify({session:{mode:'TEST_THEN_FIVE',cursor:0,queue:JSON.stringify(queue)},result:{advanced:false,correct:true}}),createdAt:now}});
+ await src.correction.create({data:{id:'correction',wordId:'word0',sourceId:'source0',trainingItemKey:'session:0',count:2,errors:1,createdAt:now}});
+ await src.attempt.create({data:{id:'attempt',wordId:'word0',sourceId:'source0',input:'harr',answer:'hare',correct:false,mode:'CORRECTION',createdAt:now}});
+ await src.errorRecord.create({data:{id:'error',wordId:'word0',sourceId:'source0',correctionId:'correction',input:'harr',answer:'hare',createdAt:now}});
+ await src.review.create({data:{id:'review',wordId:'word0',dueDay:'2026-10-17',createdAt:now}});
+ await src.task.create({data:{id:'task',day:'2026-10-17',key:'cambridge:daily',title:'今日新学',skill:'听力',kind:'NEW',isCambridge:true,chapterId:'chapter',planned:3,createdAt:now}});
+ await src.speaking.create({data:{id:'speaking',day:'2026-10-17',part:1,question:'已保存题目',answer:'自己的回答'}});await src.reflection.create({data:{day:'2026-10-17',notes:'复盘笔记',updatedAt:now}});await src.usageAttempt.create({data:{id:'usage',wordId:'word0',text:'My own sentence.',rating:'OK',createdAt:now}});
+ for(const id of ['catalog-v2','subject-pages-v4'])await src.dataMigration.create({data:{id,appliedAt:now}});
+ await src.studySpan.create({data:{id:'span',activeKey:'active',skill:'阅读',module:'第3章',budgeted:true,startedAt:new Date(+now-15000),confirmedUntil:now}});await src.studyClock.create({data:{id:1,state:'RUNNING',ownerId:'old-device',activeSpanId:'span',skill:'阅读',module:'第3章',lastHeartbeatAt:now,lastActivityAt:now,updatedAt:now}});
+ await src.$disconnect();manifest=resolve(dir,'dataset/manifest.json');execFileSync(process.execPath,['scripts/migration/export.mjs','--source',file,'--output',resolve(dir,'dataset')],{stdio:'pipe'});
+ pg=await PGlite.create();await pg.exec(readFileSync('prisma/postgresql/migrations/202610170001_initial/migration.sql','utf8'));
+ const port=await new Promise<number>((resolvePort,reject)=>{const probe=createServer();probe.once('error',reject);probe.listen(0,'127.0.0.1',()=>{const port=(probe.address() as any).port;probe.close(()=>resolvePort(port));});});server=new PGLiteSocketServer({db:pg,port,host:'127.0.0.1'});await server.start();
+ url=`postgresql://postgres@127.0.0.1:${port}/postgres?schema=kyes&connection_limit=1`;
+ ({migrate,targetIdentity}=await import('../scripts/migration/import.mjs'));
+},60000);
+afterAll(async()=>{vi.useRealTimers();await db?.$disconnect();await server?.stop();await pg?.close();if(dir)rmSync(dir,{recursive:true,force:true});delete(globalThis as any).prisma;},30000);
+it('默认plan不连接目标库；没有目标确认时禁止写入',async()=>{const plan=await migrate({manifestPath:manifest});expect(plan.mode).toBe('plan');expect(plan.tables.Source).toBe(4);await expect(migrate({manifestPath:manifest,url,apply:true,expectedTarget:'wrong'})).rejects.toThrow('显式确认');});
+it('18表全量迁入真实PostgreSQL引擎，ID/日期/字段与关联逐条核对，活动计时安全暂停',async()=>{const report=await migrate({manifestPath:manifest,url,apply:true,expectedTarget:targetIdentity(url),reportPath:resolve(dir,'missing/report.json')});expect(report.success).toBe(true);expect(report.reportSaved).toBe(false);expect(Object.keys(report.tables)).toHaveLength(18);expect(Object.values(report.tables).every((t:any)=>t.allFieldsMatch)).toBe(true);expect(report.relations.declared.Source.broken).toBe(0);
+ const {verifyTarget}=await import('../scripts/migration/dataset.mjs');await pg.exec(`UPDATE kyes."TrainingSubmission" SET response=response||'篡改'`);await db?.$disconnect();const probe=new (await import('../generated/postgres')).PrismaClient({datasourceUrl:url});try{await expect(verifyTarget(probe,manifest)).rejects.toThrow('逐字段核对失败');}finally{await probe.$disconnect();}await pg.exec(`UPDATE kyes."TrainingSubmission" SET response=left(response,length(response)-2)`);
+ process.env.DATABASE_URL=url;delete(globalThis as any).prisma;db=(await import('../lib/db')).db;const clock=await db.studyClock.findUnique({where:{id:1}});expect(clock.state).toBe('PAUSED');const span=await db.studySpan.findUnique({where:{id:'span'}});expect(+span.endedAt).toBe(+span.confirmedUntil);expect(span.activeKey).toBeNull();expect((await db.trainingSession.findUnique({where:{id:'session'}})).correctCount).toBe(2);
+},60000);
+it('拒绝向非空数据库重复导入，不覆盖原记录',async()=>{await db.$disconnect();await expect(migrate({manifestPath:manifest,url,apply:true,expectedTarget:targetIdentity(url)})).rejects.toThrow('目标非空');expect(await db.source.count()).toBe(4);});
+it('PostgreSQL复习分页、CSV词位、五遍恢复与幂等提交正常',async()=>{vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-17T04:00:00Z'));const reviews=await import('../lib/reviews');expect((await reviews.reviewPage(1,20)).items[0].english).toBe('hare');training=await import('../lib/training');const sources=await db.source.findMany({orderBy:{position:'asc'}});let s=await training.startSession({mode:'TEST_THEN_FIVE',sourceIds:sources.map((r:any)=>r.id).reverse()});expect(s.id).toBe('session');const submit=async(input:string)=>{const request={sessionId:s.id,revision:s.revision,requestId:randomUUID(),input};const first=await training.submitSession(request);expect(await training.submitSession(request)).toEqual(JSON.parse(JSON.stringify(first)));s=first.session;};
+ for(let i=0;i<3;i++)await submit('hare');expect(s.cursor).toBe(1);await submit('insect');expect(s.cursor).toBe(2);expect(JSON.parse(s.queue)[2].english).toBe('hare');expect((await db.source.findUnique({where:{id:'source2'}})).learnedCount).toBe(0);expect(await db.attempt.count()).toBe(5);
+},30000);
+it('跨天复习和科目计时在PostgreSQL上保持持久化',async()=>{vi.setSystemTime(new Date('2026-10-18T04:00:00Z'));const service=await import('../lib/service');await service.submitAttempt({wordId:'word0',sourceId:'source0',input:'hare',mode:'REVIEW'});expect((await db.review.findFirst({where:{wordId:'word0',completedAt:null}})).dueDay).toBe('2026-10-20');const timer=await import('../lib/timer');await timer.commandClock({command:'start',clientId:'new-device',skill:'听力',module:'剑桥',activityAt:Date.now()});vi.setSystemTime(new Date(Date.now()+10000));await timer.commandClock({command:'switch',clientId:'new-device',skill:'口语',module:'口语 Part 2',activityAt:Date.now()});vi.setSystemTime(new Date(Date.now()+5000));const snapshot=await timer.commandClock({command:'suspend',clientId:'new-device'});expect(snapshot.today.skills['听力']).toBe(10);expect(snapshot.today.skills['口语']).toBe(5);expect(await db.studySpan.count({where:{activeKey:'active'}})).toBe(0);});
+it('RLS阻止anon直接读取，即使误授SELECT；专用服务角色无DDL权限',async()=>{await pg.exec('CREATE ROLE anon; GRANT USAGE ON SCHEMA kyes TO anon; GRANT SELECT ON kyes."Word" TO anon; SET ROLE anon;');try{expect((await pg.query('SELECT * FROM kyes."Word"')).rows).toHaveLength(0);}finally{await pg.exec('RESET ROLE');}await pg.exec(readFileSync('scripts/migration/app-role.sql','utf8'));await pg.exec('SET ROLE kyes_app');try{expect((await pg.query('SELECT * FROM kyes."Word"')).rows).toHaveLength(3);await expect(pg.exec('CREATE TABLE kyes.must_not_create(id int)')).rejects.toThrow();}finally{await pg.exec('RESET ROLE');}});
+
+it('目标约束失败时全事务回滚，不留下半迁移记录，也不改源SQLite',async()=>{
+ await db.$disconnect();const second=await PGlite.create();let secondServer:any;
+ try{await second.exec(readFileSync('prisma/postgresql/migrations/202610170001_initial/migration.sql','utf8'));await second.exec(`ALTER TABLE kyes."Word" ADD CONSTRAINT reject_test_word CHECK (english<>'hare')`);
+ const port=await new Promise<number>((resolvePort,reject)=>{const p=createServer();p.on('error',reject);p.listen(0,'127.0.0.1',()=>{const n=(p.address() as any).port;p.close(()=>resolvePort(n));});});
+ secondServer=new PGLiteSocketServer({db:second,port,host:'127.0.0.1'});await secondServer.start();const target=`postgresql://postgres@127.0.0.1:${port}/postgres?schema=kyes&connection_limit=1`;const hash=createHash('sha256').update(readFileSync(resolve(dir,'source.db'))).digest('hex');
+ await expect(migrate({manifestPath:manifest,url:target,apply:true,expectedTarget:targetIdentity(target)})).rejects.toThrow();
+ for(let i=0;i<100&&second.isInTransaction();i++)await new Promise(r=>setTimeout(r,5));
+ for(const table of ['Setting','Book','Chapter','Word'])expect((await second.query<{n:number}>(`SELECT count(*)::int AS n FROM kyes."${table}"`)).rows[0].n).toBe(0);
+ expect(createHash('sha256').update(readFileSync(resolve(dir,'source.db'))).digest('hex')).toBe(hash);
+ }finally{await secondServer?.stop();await new Promise(r=>setImmediate(r));await second.close();}
+},30000);
+it('云端本机备份使用只读一致性事务，压缩逐表导出可再次校验',async()=>{const {exportPostgres}=await import('../scripts/migration/export-postgres.mjs');const {verifyFiles,auditRelations}=await import('../scripts/migration/dataset.mjs');await db.$disconnect();const out=resolve(dir,'pg-backup');const before=await pg.query('SELECT count(*)::int AS n FROM kyes."Attempt"');const result=await exportPostgres({url,output:out});expect(result.success).toBe(true);expect((await verifyFiles(out+'/manifest.json')).tables.Attempt.count).toBe((before.rows[0] as any).n);const relations:any=await auditRelations(out+'/manifest.json');expect(relations.declared.Source.broken).toBe(0);});

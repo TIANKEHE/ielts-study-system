@@ -39,11 +39,12 @@ export async function upgradeSubjectCatalog(){
  const reading=await tx.book.findUnique({where:{key:'LIU_READING'}});
  if(reading)await tx.book.update({where:{id:reading.id},data:{name:'刘洪波《雅思词汇真经》'}});
  await tx.book.upsert({where:{key:'LISTENING_COLLECTED'},create:{key:'LISTENING_COLLECTED',name:'做题词汇积累',skill:'听力',sort:5,chapters:{create:{name:'日常做题词汇',key:'listening:collected',sort:0}}},update:{}});
- await tx.$executeRawUnsafe('UPDATE Source SET firstLearnedAt=lastLearnedAt WHERE learnedCount>0 AND firstLearnedAt IS NULL');
- // Recover first completion from immutable submission receipts when available.
- const completions=await tx.$queryRawUnsafe<{sourceId:string|null;finishedAt:Date}[]>(`SELECT json_extract(json_extract(response,'$.session.queue'),'$['||(json_extract(response,'$.session.cursor')-1)||'].sourceId') AS sourceId, MIN(createdAt) AS finishedAt FROM TrainingSubmission WHERE json_extract(response,'$.result.advanced')=1 AND json_extract(response,'$.session.mode') IN ('ALL_FIVE','TEST_THEN_FIVE','TRANSLATION','CLOZE') GROUP BY sourceId`);
- for(const c of completions)if(c.sourceId&&c.finishedAt)await tx.source.updateMany({where:{id:c.sourceId},data:{firstLearnedAt:new Date(Number(c.finishedAt))}});
-
+ const completed=await tx.source.findMany({where:{learnedCount:{gt:0},firstLearnedAt:null,lastLearnedAt:{not:null}},select:{id:true,lastLearnedAt:true}});
+ for(const row of completed)await tx.source.update({where:{id:row.id},data:{firstLearnedAt:row.lastLearnedAt}});
+ const first=new Map<string,Date>();let cursor:string|undefined;
+ for(;;){const receipts=await tx.trainingSubmission.findMany({orderBy:{id:'asc'},take:25,...(cursor?{cursor:{id:cursor},skip:1}:{}),select:{id:true,response:true,createdAt:true}});if(!receipts.length)break;
+ for(const receipt of receipts){const r=JSON.parse(receipt.response);if(r.result?.advanced&&['ALL_FIVE','TEST_THEN_FIVE','TRANSLATION','CLOZE'].includes(r.session?.mode)){const sourceId=JSON.parse(r.session.queue)[r.session.cursor-1]?.sourceId;if(sourceId&&(!first.has(sourceId)||receipt.createdAt<first.get(sourceId)!))first.set(sourceId,receipt.createdAt);}}cursor=receipts.at(-1)!.id;}
+ for(const [id,date] of first)await tx.source.updateMany({where:{id},data:{firstLearnedAt:date}});
  await tx.dataMigration.create({data:{id:'subject-pages-v4',details:'Non-destructive subject navigation; retain all book/source IDs; backfill source first completion.'}});
  });
 }

@@ -34,3 +34,9 @@ pnpm start
 技术：Next.js、TypeScript、React Hook Form、Zod、Prisma、SQLite、Vitest。业务规则放在 lib/，训练及计时使用数据库事务，AI 接口仅预留，未连接供应商。
 
 设计与计时规则见 [docs/architecture.md](docs/architecture.md)。代码同步流程见 [docs/github.md](docs/github.md)。仓库只存源码，不包含已导入的个人词汇、学习历史及数据库。
+
+## Supabase / Vercel准备
+
+本机SQLite继续保留；PostgreSQL使用独立Schema和客户端，线上所有学习API要求Supabase验证的单一owner账号。迁移默认只检查、显式确认后才向空目标写入，并逐字段核对和事务回滚。
+
+详细步骤和环境变量说明见 [docs/supabase-migration.md](docs/supabase-migration.md)。不要直接用旧版或未配置登录保护的构建上线；不要把个人数据或.env提交到仓库。
