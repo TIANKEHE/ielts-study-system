@@ -1,0 +1,1 @@
+export function acceptsEnter(event:{key:string;repeat:boolean;isComposing:boolean;keyCode:number},composing:boolean,held:boolean){return event.key==='Enter'&&!event.repeat&&!event.isComposing&&event.keyCode!==229&&!composing&&!held;}

@@ -1,0 +1,242 @@
+generator client {
+ provider = "prisma-client-js"
+}
+datasource db {
+ provider = "sqlite"
+ url = env("DATABASE_URL")
+}
+model Setting {
+ id Int @id @default(1)
+ timezone String @default("Asia/Shanghai")
+ intervals String @default("[1,3,7,14,30]")
+ reviewLimit Int @default(60)
+ writingGoal Int @default(12)
+ newGoal Int @default(20)
+ audioAuto Boolean @default(true)
+ audioAccent String @default("en-GB")
+ audioRate Float @default(1)
+ audioEveryRepeat Boolean @default(true)
+ budgetMinutes Int @default(240)
+ reviewGroupSize Int @default(20)
+ theme String @default("eye")
+ fontSize Int @default(16)
+ target String @default("稳步积累，完成今天的学习闭环")
+}
+model Book {
+ id String @id @default(cuid())
+ key String? @unique
+ name String
+ skill String
+ sort Int @default(0)
+ chapters Chapter[]
+}
+model Chapter {
+ id String @id @default(cuid())
+ key String? @unique
+ volume Int?
+ test Int?
+ part Int?
+ name String
+ sort Int @default(0)
+ bookId String
+ book Book @relation(fields:[bookId], references:[id], onDelete:Cascade)
+ sources Source[]
+ tasks Task[]
+ studyCount Int @default(0)
+}
+model Word {
+ id String @id @default(cuid())
+ english String @unique
+ chinese String
+ ipa String @default("")
+ pos String @default("")
+ example String @default("")
+ collocation String @default("")
+ notes String @default("")
+ topic String @default("")
+ aliases String @default("[]")
+ forms String @default("[]")
+ confirmed Boolean @default(true)
+ createdAt DateTime @default(now())
+ firstLearnedAt DateTime?
+ lastLearnedAt DateTime?
+ lastReviewedAt DateTime?
+ nextReviewAt DateTime?
+ mastery String @default("NEW")
+ reviewStage Int @default(0)
+ crossDaySuccess Int @default(0)
+ errorCount Int @default(0)
+ sources Source[]
+ attempts Attempt[]
+ errors ErrorRecord[]
+ corrections Correction[]
+ reviews Review[]
+ usageAttempts UsageAttempt[]
+}
+model Source {
+ id String @id @default(cuid())
+ wordId String
+ chapterId String
+ meaning String @default("")
+ position Int @default(0)
+ originalPosition Int @default(0)
+ importBatch String?
+ questionNumber String?
+ excluded Boolean @default(false)
+ learnedCount Int @default(0)
+ errorCount Int @default(0)
+ firstLearnedAt DateTime?
+ lastLearnedAt DateTime?
+ word Word @relation(fields:[wordId], references:[id], onDelete:Cascade)
+ chapter Chapter @relation(fields:[chapterId], references:[id], onDelete:Cascade)
+ @@index([chapterId,position])
+ @@index([wordId,chapterId])
+}
+model Attempt {
+ id String @id @default(cuid())
+ wordId String
+ word Word @relation(fields:[wordId], references:[id], onDelete:Cascade)
+ sourceId String?
+ sourceLabel String @default("")
+ input String
+ answer String
+ correct Boolean
+ mode String
+ createdAt DateTime @default(now())
+}
+model ErrorRecord {
+ id String @id @default(cuid())
+ wordId String
+ word Word @relation(fields:[wordId], references:[id], onDelete:Cascade)
+ sourceId String?
+ sourceLabel String @default("")
+ input String
+ answer String
+ type String @default("拼写错误")
+ createdAt DateTime @default(now())
+ correctionId String?
+ correction Correction? @relation(fields:[correctionId],references:[id])
+}
+model Correction {
+ id String @id @default(cuid())
+ wordId String
+ word Word @relation(fields:[wordId], references:[id], onDelete:Cascade)
+ trainingItemKey String? @unique
+ sourceId String?
+ count Int @default(0)
+ errors Int @default(0)
+ createdAt DateTime @default(now())
+ completedAt DateTime?
+ errorsLog ErrorRecord[]
+}
+model Review {
+ id String @id @default(cuid())
+ wordId String
+ word Word @relation(fields:[wordId],references:[id],onDelete:Cascade)
+ dueDay String
+ completedAt DateTime?
+ success Boolean?
+ createdAt DateTime @default(now())
+ @@unique([wordId,dueDay])
+}
+model Task {
+ id String @id @default(cuid())
+ day String
+ key String
+ title String
+ skill String
+ kind String
+ status String @default("PENDING")
+ isCambridge Boolean @default(false)
+ reason String @default("")
+ planned Int @default(0)
+ actual Int @default(0)
+ sort Int @default(0)
+ chapterId String?
+ chapter Chapter? @relation(fields:[chapterId], references:[id], onDelete:SetNull)
+ createdAt DateTime @default(now())
+ @@unique([day,key])
+}
+model Speaking {
+ id String @id @default(cuid())
+ day String
+ part Int
+ question String @default("")
+ answer String @default("")
+ keywords String @default("")
+ improvements String @default("")
+ status String @default("PENDING")
+ audioUrl String?
+ aiFeedback String?
+ @@unique([day,part])
+}
+model Reflection {
+ day String @id
+ notes String @default("")
+ updatedAt DateTime @updatedAt
+}
+
+model UsageAttempt {
+ id String @id @default(cuid())
+ wordId String
+ word Word @relation(fields:[wordId],references:[id],onDelete:Cascade)
+ text String
+ rating String
+ createdAt DateTime @default(now())
+}
+
+model TrainingSession {
+ id String @id @default(cuid())
+ isReviewGroup Boolean @default(false)
+ scopeKey String
+ title String
+ mode String
+ queue String
+ cursor Int @default(0)
+ revision Int @default(0)
+ phase String @default("CORRECTION")
+ correctCount Int @default(0)
+ currentErrors Int @default(0)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ completedAt DateTime?
+ @@index([scopeKey,mode,completedAt])
+}
+model TrainingSubmission {
+ id String @id
+ sessionId String
+ requestBody String
+ response String
+ createdAt DateTime @default(now())
+}
+model DataMigration {
+ id String @id
+ details String @default("")
+ appliedAt DateTime @default(now())
+}
+
+model StudyClock {
+ id Int @id @default(1)
+ state String @default("IDLE")
+ ownerId String?
+ skill String @default("听力")
+ module String @default("词汇学习")
+ budgeted Boolean @default(true)
+ activeSpanId String?
+ lastHeartbeatAt DateTime?
+ lastActivityAt DateTime?
+ reason String @default("")
+ updatedAt DateTime @updatedAt
+}
+model StudySpan {
+ id String @id @default(cuid())
+ activeKey String? @unique
+ skill String
+ module String
+ budgeted Boolean
+ startedAt DateTime
+ confirmedUntil DateTime
+ endedAt DateTime?
+ endReason String @default("")
+ @@index([startedAt])
+}

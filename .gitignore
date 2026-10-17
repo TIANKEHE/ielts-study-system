@@ -1,0 +1,41 @@
+# Dependencies and generated builds
+node_modules/
+.next*/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+# Secrets; only the placeholder template is safe to track
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+# Personal databases, journals and all backups (at any path)
+*.db
+*.db-*
+*.db.*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.bak
+*.backup
+# Personal scratch files, exports, archived source bundles and learning records
+work/
+outputs/
+.DS_Store
+# Imported personal vocabulary and exported histories
+*.csv
+*.tsv
+*.jsonl
+exports/
+backups/
+credentials*.json
+secrets*.json
+*-backup*.json
+
+# Local logs and authentication caches
+*.log
+.auth/
